@@ -9,8 +9,6 @@
 #
 
 srcdir = .
-exec_prefix = /usr/local
-bindir = $(exec_prefix)/bin
 
 prefix = /usr/local/musl
 includedir = $(prefix)/include
@@ -61,13 +59,6 @@ INCLUDES = $(wildcard $(srcdir)/include/*.h $(srcdir)/include/*/*.h)
 ALL_INCLUDES = $(sort $(INCLUDES:$(srcdir)/%=%) $(GENH:obj/%=%) $(ARCH_INCLUDES:$(srcdir)/arch/$(ARCH)/%=include/%) $(GENERIC_INCLUDES:$(srcdir)/arch/generic/%=include/%))
 
 EMPTY_LIB_NAMES = m rt pthread crypt util xnet resolv dl
-EMPTY_LIBS = $(EMPTY_LIB_NAMES:%=lib/lib%.a)
-CRT_LIBS = $(addprefix lib/,$(notdir $(CRT_OBJS)))
-STATIC_LIBS = lib/libc.a
-SHARED_LIBS = lib/libc.so
-TOOL_LIBS = lib/musl-gcc.specs
-ALL_LIBS = $(CRT_LIBS) $(STATIC_LIBS) $(SHARED_LIBS) $(EMPTY_LIBS) $(TOOL_LIBS)
-ALL_TOOLS = obj/musl-gcc
 
 WRAPCC_GCC = gcc
 WRAPCC_CLANG = clang
@@ -84,11 +75,11 @@ all:
 
 else
 
-all: $(ALL_LIBS) $(ALL_TOOLS)
+all: elfenv.so
 
-OBJ_DIRS = $(sort $(patsubst %/,%,$(dir $(ALL_LIBS) $(ALL_TOOLS) $(ALL_OBJS) $(GENH) $(GENH_INT))) obj/include)
+OBJ_DIRS = $(sort $(patsubst %/,%,$(dir $(ALL_OBJS) $(GENH) $(GENH_INT))) obj/include)
 
-$(ALL_LIBS) $(ALL_TOOLS) $(ALL_OBJS) $(ALL_OBJS:%.o=%.lo) $(GENH) $(GENH_INT): | $(OBJ_DIRS)
+$(ALL_OBJS) $(ALL_OBJS:%.o=%.lo) $(GENH) $(GENH_INT): | $(OBJ_DIRS)
 
 $(OBJ_DIRS):
 	mkdir -p $@
@@ -156,44 +147,25 @@ obj/%.lo: $(srcdir)/%.S
 obj/%.lo: $(srcdir)/%.c $(GENH) $(IMPH)
 	$(CC_CMD)
 
-lib/libc.so: $(LOBJS) $(LDSO_OBJS)
+LD_OBJS = $(addprefix obj/ldso/, \
+	dlstart.lo \
+)
+
+LDSO_LIBC_OBJS = $(addprefix obj/src/, \
+	misc/syscall.lo \
+	errno/__errno_location.lo \
+	internal/syscall_ret.lo \
+	thread/__syscall_cp.lo \
+)
+
+elfenv.so: $(LD_OBJS) $(LDSO_LIBC_OBJS)
+	mkdir -p lib
 	$(CC) $(CFLAGS_ALL) $(LDFLAGS_ALL) -nostdlib -shared \
-	-Wl,-e,_dlstart -o $@ $(LOBJS) $(LDSO_OBJS) $(LIBCC)
-
-lib/libc.a: $(AOBJS)
-	rm -f $@
-	$(AR) rc $@ $(AOBJS)
-	$(RANLIB) $@
-
-$(EMPTY_LIBS):
-	rm -f $@
-	$(AR) rc $@
-
-lib/%.o: obj/crt/$(ARCH)/%.o
-	cp $< $@
-
-lib/%.o: obj/crt/%.o
-	cp $< $@
-
-lib/musl-gcc.specs: $(srcdir)/tools/musl-gcc.specs.sh config.mak
-	sh $< "$(includedir)" "$(libdir)" "$(LDSO_PATHNAME)" > $@
-
-obj/musl-gcc: config.mak
-	printf '#!/bin/sh\nexec "$${REALGCC:-$(WRAPCC_GCC)}" "$$@" -specs "%s/musl-gcc.specs"\n' "$(libdir)" > $@
-	chmod +x $@
+	-Wl,-e,_dlstart -o $@ $^ $(LIBCC)
 
 obj/%-clang: $(srcdir)/tools/%-clang.in config.mak
 	sed -e 's!@CC@!$(WRAPCC_CLANG)!g' -e 's!@PREFIX@!$(prefix)!g' -e 's!@INCDIR@!$(includedir)!g' -e 's!@LIBDIR@!$(libdir)!g' -e 's!@LDSO@!$(LDSO_PATHNAME)!g' $< > $@
 	chmod +x $@
-
-$(DESTDIR)$(bindir)/%: obj/%
-	$(INSTALL) -D $< $@
-
-$(DESTDIR)$(libdir)/%.so: lib/%.so
-	$(INSTALL) -D -m 755 $< $@
-
-$(DESTDIR)$(libdir)/%: lib/%
-	$(INSTALL) -D -m 644 $< $@
 
 $(DESTDIR)$(includedir)/bits/%: $(srcdir)/arch/$(ARCH)/bits/%
 	$(INSTALL) -D -m 644 $< $@
@@ -210,13 +182,8 @@ $(DESTDIR)$(includedir)/%: $(srcdir)/include/%
 $(DESTDIR)$(LDSO_PATHNAME): $(DESTDIR)$(libdir)/libc.so
 	$(INSTALL) -D -l $(libdir)/libc.so $@ || true
 
-install-libs: $(ALL_LIBS:lib/%=$(DESTDIR)$(libdir)/%) $(if $(SHARED_LIBS),$(DESTDIR)$(LDSO_PATHNAME),)
-
-install-headers: $(ALL_INCLUDES:include/%=$(DESTDIR)$(includedir)/%)
-
-install-tools: $(ALL_TOOLS:obj/%=$(DESTDIR)$(bindir)/%)
-
-install: install-libs install-headers install-tools
+install:
+	echo "install not implemented"
 
 musl-git-%.tar.gz: .git
 	 git --git-dir=$(srcdir)/.git archive --format=tar.gz --prefix=$(patsubst %.tar.gz,%,$@)/ -o $@ $(patsubst musl-git-%.tar.gz,%,$@)
@@ -227,9 +194,9 @@ musl-%.tar.gz: .git
 endif
 
 clean:
-	rm -rf obj lib
+	rm -rf obj elfenv.so
 
 distclean: clean
 	rm -f config.mak
 
-.PHONY: all clean install install-libs install-headers install-tools
+.PHONY: all clean install
